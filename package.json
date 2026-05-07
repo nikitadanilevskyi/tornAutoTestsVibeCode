@@ -1,0 +1,19 @@
+{
+  "name": "torn-auto-tests-vibe-code",
+  "version": "1.0.0",
+  "description": "Playwright auto-tests for Torn (money-input plugin, page-specific flows, branch QA suites).",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:no-setup": "playwright test --config=playwright.config.no-setup.js",
+    "test:money-input": "playwright test e2e/money-input/",
+    "test:traveling": "playwright test --config=playwright.config.no-setup.js e2e/money-input-traveling/",
+    "test:rspack-migration": "playwright test --config=playwright.config.no-setup.js e2e/rspack-migration/",
+    "test:lifecycle": "playwright test --config=playwright.config.no-setup.js e2e/money-input/ajax-lifecycle.spec.ts e2e/money-input/plugin-lifecycle.spec.ts",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "dotenv": "^17.3.1"
+  }
+}

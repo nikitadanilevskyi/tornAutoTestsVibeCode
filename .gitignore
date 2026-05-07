@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.local
+
+# Playwright generated
+playwright/.auth/
+playwright-report/
+test-results/
+**/test-failed-*.png
+**/error-context.md
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+*.log
