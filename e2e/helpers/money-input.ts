@@ -251,7 +251,10 @@ export const EXPECTED_INPUT_HEIGHT_PX = 34;
  * The result is zoom-independent and equals `offsetHeight` at 1× zoom.  For
  * `border-box` inputs it equals the CSS `height` value directly (34 px).
  */
-export async function checkInputHeight(input: Locator): Promise<void> {
+export async function checkInputHeight(
+  input: Locator,
+  expectedPx: number = EXPECTED_INPUT_HEIGHT_PX,
+): Promise<void> {
   const h = await input.evaluate((el) => {
     const s = getComputedStyle(el as HTMLElement);
     const bodyZoom = parseFloat((document.body as HTMLElement).style.zoom) || 1;
@@ -266,8 +269,8 @@ export async function checkInputHeight(input: Locator): Promise<void> {
   // multiplying border widths by the zoom factor (e.g. 33.999995 → 34).
   expect(
     Math.round(h),
-    `input-money height: expected ${EXPECTED_INPUT_HEIGHT_PX}px, got ${h}px`,
-  ).toBe(EXPECTED_INPUT_HEIGHT_PX);
+    `input-money height: expected ${expectedPx}px, got ${h}px`,
+  ).toBe(expectedPx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

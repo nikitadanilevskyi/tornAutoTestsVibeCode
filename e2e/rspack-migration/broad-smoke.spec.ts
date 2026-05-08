@@ -45,10 +45,11 @@ async function captureLoad(page: Page, url: string) {
 // per-page `navigate` steps — just hit the URL and watch for compilation-shape
 // errors during initial render. Same URL appearing multiple times (different
 // money-input surfaces on one page) is deduplicated.
-// Skip traveling-only pages (require player to be currently abroad).
+// Skip pages that require specific game state (currently abroad / active
+// trade with hard-coded ID).
 const SMOKE_TARGETS = Array.from(
   new Map(
-    PAGES.filter((p) => !p.traveling).map((p) => [p.url, { name: p.name.split(' / ')[0], url: p.url }]),
+    PAGES.filter((p) => !p.traveling && !p.trade).map((p) => [p.url, { name: p.name.split(' / ')[0], url: p.url }]),
   ).values(),
 );
 

@@ -27,7 +27,7 @@
  * Primary test beds:
  *  • /page.php?sid=bookie         — bookie bet input
  *  • /page.php?sid=holdemData     — hold'em bet and buy-in
- *  • /page.php?sid=stocks         — stock market
+ *  • /page.php?sid=stocks&stockID=1&tab=owned   — stock market (owned tab)
  *  • /page.php?sid=ItemMarket     — item market
  *  • /page.php?sid=travel         — abroad shop (when player is travelling)
  *  • /factions.php?step=your      — faction pay day
@@ -88,17 +88,17 @@ async function gotoHoldemBet(page: Page): Promise<Locator | null> {
 }
 
 async function gotoStockMarket(page: Page): Promise<Locator | null> {
-  await page.goto('/page.php?sid=stocks');
-  // Click the first stock card to open the buy/sell dialog
-  const card = page
-    .locator('.stock-card, [data-testid="stock-card"], .stock-item, .stocks-list > li')
-    .first();
-  const cardVisible = await card
+  // Deep-link to the owned-stock view for stockID=1, then click the first
+  // stockOwned row to expand its buy/sell section. CSS-module class hashes
+  // (stockOwned___eXJed) are unstable across builds — match by prefix.
+  await page.goto('/page.php?sid=stocks&stockID=1&tab=owned');
+  const ownedRow = page.locator('[class*="stockOwned"]').first();
+  const rowVisible = await ownedRow
     .waitFor({ state: 'visible', timeout: 20_000 })
     .then(() => true)
     .catch(() => false);
-  if (!cardVisible) return null;
-  await card.click();
+  if (!rowVisible) return null;
+  await ownedRow.click();
 
   const input = page
     .locator('.input-money-group input.input-money:not([type="hidden"])')

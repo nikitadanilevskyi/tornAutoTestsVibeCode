@@ -1,10 +1,21 @@
 import { test } from '@playwright/test';
 import {
   checkInputHeight,
+  EXPECTED_INPUT_HEIGHT_PX,
   VIEWPORTS,
   ZOOM_LEVELS,
 } from '../helpers/money-input';
-import { PAGES } from './pages';
+import { PAGES, type PageDef } from './pages';
+
+/**
+ * Resolve the expected input height for a page at a given viewport width.
+ * Falls back to the global default (34 px) when the page doesn't override.
+ */
+function expectedHeightFor(pageDef: PageDef, viewportWidth: number): number {
+  const e = pageDef.expectedHeightPx;
+  if (e == null) return EXPECTED_INPUT_HEIGHT_PX;
+  return typeof e === 'function' ? e(viewportWidth) : e;
+}
 
 // ─── Height = 34 px at every viewport and zoom level ─────────────────────────
 //
@@ -35,12 +46,20 @@ import { PAGES } from './pages';
 // If a page's prerequisite is not met (e.g. the account has no company, no
 // property vault, …) the test is skipped rather than failed.
 
-// Traveling pages (Travel Abroad Shop, Cayman Bank) require the player to be
-// currently abroad. They are exercised separately in e2e/money-input/traveling.spec.ts.
-for (const pageDef of PAGES.filter((p) => !p.traveling)) {
-  test.describe(`${pageDef.name} — height ${34}px`, () => {
+// Pages that require specific game state are filtered out and exercised
+// in their own dedicated specs:
+//   • p.traveling → e2e/money-input-traveling/traveling.spec.ts
+//   • p.trade     → e2e/money-input-trade/trade.spec.ts
+for (const pageDef of PAGES.filter((p) => !p.traveling && !p.trade)) {
+  // Use the desktop expected height (1280 px) in the describe label since
+  // most pages don't vary; entries that override per-viewport (e.g. Racing)
+  // will display 24 px here but be exercised at 34 px at narrower widths.
+  const labelHeight = expectedHeightFor(pageDef, 1280);
+  test.describe(`${pageDef.name} — height ${labelHeight}px`, () => {
     if (pageDef.serial) test.describe.configure({ mode: 'serial' });
     test.setTimeout(90_000);
+
+    const expectedHeight = (vw: number) => expectedHeightFor(pageDef, vw);
 
     // ── Helper: navigate to the page and return false when a prerequisite
     //    is missing so the caller can skip the test.
@@ -74,7 +93,7 @@ for (const pageDef of PAGES.filter((p) => !p.traveling)) {
           return;
         }
 
-        await checkInputHeight(input);
+        await checkInputHeight(input, expectedHeight(viewport.width));
       });
     }
 
@@ -91,12 +110,12 @@ for (const pageDef of PAGES.filter((p) => !p.traveling)) {
         }
 
         // Apply CSS body zoom.  `offsetHeight` is unaffected by ancestor zoom,
-        // so the assertion value stays 34 regardless of zoom factor.
+        // so the assertion value stays consistent regardless of zoom factor.
         await page.evaluate((z) => {
           document.body.style.zoom = String(z);
         }, zoom.value);
 
-        await checkInputHeight(pageDef.getInput(page));
+        await checkInputHeight(pageDef.getInput(page), expectedHeight(1280));
       });
     }
   });

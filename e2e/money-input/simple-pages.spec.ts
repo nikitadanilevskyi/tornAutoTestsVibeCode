@@ -9,10 +9,13 @@ import { PAGES } from './pages';
 
 // ─── Generate test suites ─────────────────────────────────────────────────────
 
-// Traveling pages (Travel Abroad Shop, Cayman Bank deposit/withdraw) require
-// the player to be currently abroad. They live in e2e/money-input/traveling.spec.ts
-// and are run separately from the general workflow.
-for (const { name, url, getInput, navigate, serial, allowZero } of PAGES.filter((p) => !p.traveling)) {
+// Pages excluded from the standard helper-based behavioural sweep:
+//   • p.traveling   → e2e/money-input-traveling/traveling.spec.ts
+//   • p.trade       → e2e/money-input-trade/trade.spec.ts
+//   • p.sanityOnly  → contract diverges from the shared helpers
+//                     (low-cap inputs, AmountInput, etc.) — height tests
+//                     still run because they are cap-independent
+for (const { name, url, getInput, navigate, serial, allowZero } of PAGES.filter((p) => !p.traveling && !p.trade && !p.sanityOnly)) {
   test.describe(name, () => {
     if (serial) test.describe.configure({ mode: 'serial' });
     test.setTimeout(90_000);

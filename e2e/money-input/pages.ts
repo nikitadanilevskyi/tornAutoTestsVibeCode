@@ -24,6 +24,20 @@ export type PageDef = {
    *  height, no $ symbol button). Behavioral tests are skipped for these
    *  entries; only the reachability SANITY check applies. */
   sanityOnly?: boolean;
+  /** Pages whose money input requires an active trade with a hard-coded
+   *  trade ID in the URL (e.g. /trade.php#step=addmoney&ID=12106782).
+   *  Filtered out of the default workflow specs and exercised separately
+   *  by e2e/money-input-trade. The trade ID in the URL must be updated
+   *  manually when the trade is completed/cancelled/expired. */
+  trade?: boolean;
+  /** Override the expected CSS computed height (in px) for this input.
+   *  Defaults to 34 (EXPECTED_INPUT_HEIGHT_PX in helpers/money-input.ts).
+   *
+   *  Pass a number for a constant override across all viewports, or a
+   *  function `(viewportWidth) => px` when the page intentionally uses a
+   *  responsive height (e.g. Racing / Custom Race Bet: 34 px on mobile/
+   *  tablet, 24 px on viewports ≥ 900 px). */
+  expectedHeightPx?: number | ((viewportWidth: number) => number);
 };
 
 // ─── Shared locator helper ────────────────────────────────────────────────────
@@ -462,12 +476,13 @@ export const PAGES: PageDef[] = [
   // ── Properties — sell / lease / offer-extension tabs ────────────────────
 
   {
-    // Clicking the "sell" option in the property options list triggers
-    // toggledOptionsContainers('sell') which calls tornInputMoney on
-    // .sell-opt .market.cont .money[type="text"].  The hash tab=sell makes
-    // properties.js auto-click the sell-prop li on page load.
+    // Deep-link with `tab=sell` makes properties.js auto-click the
+    // sell-prop li on load and toggledOptionsContainers('sell') calls
+    // tornInputMoney on .sell-opt .market.cont .money[type="text"].
+    // ID is the player's property ID — update manually when this
+    // property is sold or no longer owned.
     name: 'Properties / Sell',
-    url: '/properties.php#/p=options&ID=4165929&tab=sell',
+    url: '/properties.php#/p=options&ID=4191017&tab=sell&route=properties',
     getInput: (p) => p.locator('.sell-opt .market.cont .input-money-group input[type="text"]'),
     navigate: async (page) => {
       const group = page.locator('.sell-opt .market.cont .input-money-group');
@@ -484,7 +499,7 @@ export const PAGES: PageDef[] = [
     // tornInputMoney is called with strictMode: true, skipBlurCheck: true,
     // buttonElement: null.  No data-money → relative shortcuts are skipped.
     name: 'Properties / Lease — User Cost',
-    url: '/properties.php#/p=options&ID=4165929&tab=lease',
+    url: '/properties.php#/p=options&ID=4191017&tab=lease&route=properties',
     getInput: (p) => p.locator('.lease-opt #user .cost .input-money-group input[type="text"]'),
     navigate: async (page) => {
       const group = page.locator('.lease-opt #user .cost .input-money-group');
@@ -499,7 +514,7 @@ export const PAGES: PageDef[] = [
   {
     // Properties lease tab — user section, amount (duration/payment) field.
     name: 'Properties / Lease — User Amount',
-    url: '/properties.php#/p=options&ID=4165929&tab=lease',
+    url: '/properties.php#/p=options&ID=4191017&tab=lease&route=properties',
     getInput: (p) => p.locator('.lease-opt #user .amount .input-money-group input[type="text"]'),
     navigate: async (page) => {
       const group = page.locator('.lease-opt #user .amount .input-money-group');
@@ -513,13 +528,24 @@ export const PAGES: PageDef[] = [
 
   {
     // Properties lease tab — market section, cost field.
+    // The lease panel has two jQuery-UI tabs: User (default, #user) and
+    // Market (#market). The Market section is hidden until the
+    // <li id="leasemarket"> tab anchor is clicked.
     name: 'Properties / Lease — Market Cost',
-    url: '/properties.php#/p=options&ID=4165929&tab=lease',
+    url: '/properties.php#/p=options&ID=4191017&tab=lease&route=properties',
     getInput: (p) => p.locator('.lease-opt #market .cost .input-money-group input[type="text"]'),
     navigate: async (page) => {
+      const marketTab = page.locator('#leasemarket');
+      const tabReady = await marketTab
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!tabReady) return false;
+      await marketTab.click();
+
       const group = page.locator('.lease-opt #market .cost .input-money-group');
       const visible = await group
-        .waitFor({ state: 'visible', timeout: 15_000 })
+        .waitFor({ state: 'visible', timeout: 10_000 })
         .then(() => true)
         .catch(() => false);
       if (!visible) return false;
@@ -529,12 +555,20 @@ export const PAGES: PageDef[] = [
   {
     // Properties lease tab — market section, amount field.
     name: 'Properties / Lease — Market Amount',
-    url: '/properties.php#/p=options&ID=4165929&tab=lease',
+    url: '/properties.php#/p=options&ID=4191017&tab=lease&route=properties',
     getInput: (p) => p.locator('.lease-opt #market .amount .input-money-group input[type="text"]'),
     navigate: async (page) => {
+      const marketTab = page.locator('#leasemarket');
+      const tabReady = await marketTab
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!tabReady) return false;
+      await marketTab.click();
+
       const group = page.locator('.lease-opt #market .amount .input-money-group');
       const visible = await group
-        .waitFor({ state: 'visible', timeout: 15_000 })
+        .waitFor({ state: 'visible', timeout: 10_000 })
         .then(() => true)
         .catch(() => false);
       if (!visible) return false;
@@ -597,20 +631,24 @@ export const PAGES: PageDef[] = [
     // only visible to faction leaders; the navigate function returns false
     // (skips) if the pay-day panel fails to load.
     name: 'Faction Controls / Pay Day',
-    url: '/factions.php?step=your#/tab=controls&option=pay-day',
-    getInput: (p) => p.locator('.payment-cont .input-money-group input[type="text"]'),
+    // Deep-link with `type=1` ensures faction-leader context (only leaders
+    // see the pay-day panel) and the hash auto-selects the Pay Day option
+    // inside the controls tab — no extra clicks required.
+    //
+    // The Pay Day panel renders inside a CSS-module React form (class
+    // hash `form___...`); the legacy `.payment-cont` selector no longer
+    // matches. Pay Day shows exactly one money input on the page (the
+    // amount-per-member with cap = faction vault balance), so a generic
+    // `.input-money-group input.input-money` selector is unambiguous.
+    //
+    // The plugin runs with strictMode: false (allowZero=true) so that an
+    // empty/zero per-member amount is a valid intermediate state.
+    url: '/factions.php?step=your&type=1#/tab=controls&option=pay-day',
+    allowZero: true,
+    getInput: (p) => p.locator('.input-money-group input.input-money:not([type="hidden"])').first(),
     navigate: async (page) => {
-      // Navigate to the controls tab first if not already there
-      const controlsTab = page.locator('.faction-tabs li[data-case="controls"] a');
-      const tabVisible = await controlsTab
-        .waitFor({ state: 'visible', timeout: 15_000 })
-        .then(() => true)
-        .catch(() => false);
-      if (!tabVisible) return false;
-      await controlsTab.click();
-
-      const group = page.locator('.payment-cont .input-money-group');
-      const visible = await group
+      const input = page.locator('.input-money-group input.input-money:not([type="hidden"])').first();
+      const visible = await input
         .waitFor({ state: 'visible', timeout: 20_000 })
         .then(() => true)
         .catch(() => false);
@@ -646,6 +684,9 @@ export const PAGES: PageDef[] = [
     name: 'Company / Employee Pay',
     url: '/companies.php?step=your&type=1#/option=employees',
     allowZero: true,
+    // Compact form factor at desktop breakpoints — 34 px at < 900 px,
+    // 24 px at ≥ 900 px (intentional design, same as Racing).
+    expectedHeightPx: (vw) => (vw >= 900 ? 24 : 34),
     getInput: (p) => p.locator('.employee-input-pay.input-money').first(),
     navigate: async (page) => {
       // Wait for tornInputMoney to wrap at least one employee pay input
@@ -712,54 +753,127 @@ export const PAGES: PageDef[] = [
 
   // ── Item shop (Gun Shop) ──────────────────────────────────────────────────
 
+  // ── Shops (Big Al's, Sally's, Cyber Force, Nikeh, Music removed —
+  //     no input.input-money on this account at probe time).
+  //
+  // Each shop hosts one or more `ul.item > li.amount > .input-money-group >
+  // input.input-money` instances, one per stocked item. data-money on each
+  // input = current available stock for that item; tornInputMoney is
+  // initialised with `showSymbolButton: false`.
+  //
+  // Caps are tied to per-item stock and are typically single-digit to
+  // low-triple-digit. The shared shortcut/relative helpers in
+  // helpers/money-input.ts assume large caps (millions+), so each entry
+  // sets `sanityOnly: true` to opt out of those helper-based tests in
+  // simple-pages.spec.ts. The cap-independent height test in
+  // height.spec.ts still runs — shops use a compact 24 px form at all
+  // viewports, captured via `expectedHeightPx: 24`.
+
   {
-    // shops.php — sell items amount.  tornInputMoney is called on
-    // .sell-items-list input[name="amount"][type="text"] with showSymbolButton: false.
-    // data-money is set on each input to the quantity available.
-    // Returns false if the player has no items listed for sale.
-    name: 'Gun Shop / Sell Items Amount',
-    url: '/shops.php',
+    name: 'Shop / Torn Docks',
+    url: '/shops.php?step=docks',
     serial: true,
-    getInput: (p) => p.locator('.sell-items-list input[name="amount"].input-money:not([type="hidden"])').first(),
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
     navigate: async (page) => {
-      const group = page.locator('.sell-items-list .input-money-group').first();
-      const visible = await group
-        .waitFor({ state: 'visible', timeout: 20_000 })
-        .then(() => true)
-        .catch(() => false);
-      if (!visible) return false;
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
     },
   },
 
   {
-    // shops.php — pawn shop sell points.  tornInputMoney is called on
-    // .sell-points-wrap input[name=points] with default options (strictMode: true).
-    // No data-money → relative shortcuts are skipped.
-    name: 'Gun Shop / Sell Points',
-    url: '/shops.php',
+    name: 'Shop / Jewelry Store',
+    url: '/shops.php?step=jewelry',
     serial: true,
-    getInput: (p) => p.locator('.sell-points-wrap .input-money-group input[type="text"]'),
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
     navigate: async (page) => {
-      const group = page.locator('.sell-points-wrap .input-money-group');
-      const visible = await group
-        .waitFor({ state: 'visible', timeout: 20_000 })
-        .then(() => true)
-        .catch(() => false);
-      if (!visible) return false;
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
+    },
+  },
+
+  {
+    name: 'Shop / Pharmacy',
+    url: '/shops.php?step=pharmacy',
+    serial: true,
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
+    navigate: async (page) => {
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
+    },
+  },
+
+  {
+    name: 'Shop / Post Office',
+    url: '/shops.php?step=postoffice',
+    serial: true,
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
+    navigate: async (page) => {
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
+    },
+  },
+
+  {
+    name: 'Shop / Print Store',
+    url: '/shops.php?step=printstore',
+    serial: true,
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
+    navigate: async (page) => {
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
+    },
+  },
+
+  {
+    name: 'Shop / Super Store',
+    url: '/shops.php?step=super',
+    serial: true,
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
+    navigate: async (page) => {
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
+    },
+  },
+
+  {
+    name: 'Shop / Pawn Shop',
+    url: '/shops.php?step=pawnshop',
+    serial: true,
+    sanityOnly: true,
+    expectedHeightPx: 24,
+    getInput: (p) => p.locator('.amount .input-money-group input.input-money:not([type="hidden"])').first(),
+    navigate: async (page) => {
+      const group = page.locator('.amount .input-money-group').first();
+      if (!(await group.waitFor({ state: 'visible', timeout: 15_000 }).then(() => true).catch(() => false))) return false;
     },
   },
 
   // ── Racing ────────────────────────────────────────────────────────────────
 
   {
-    // racing.php — custom race bet amount.  tornInputMoney is called in init()
-    // on #createCustomRace .bet-wrap .input-wrap input with strictMode: false
-    // (allowZero: true) and showSymbolButton: false.  The form is rendered
-    // server-side when #select-racing-track exists; returns false if the
-    // player does not have racing access.
+    // /page.php?sid=racing&tab=customrace&section=createCustomRace —
+    // deep-link straight into the Create Custom Race form, surfacing the
+    // bet-amount input. tornInputMoney is called in init() with
+    // strictMode: false (allowZero: true) and showSymbolButton: false.
+    // Returns false if the player does not have racing access.
     name: 'Racing / Custom Race Bet',
-    url: '/racing.php',
+    url: '/page.php?sid=racing&tab=customrace&section=createCustomRace',
     allowZero: true,
+    // Compact form factor at desktop breakpoints — 34 px at < 900 px,
+    // 24 px at ≥ 900 px (intentional design).
+    expectedHeightPx: (vw) => (vw >= 900 ? 24 : 34),
     getInput: (p) => p.locator('#createCustomRace .bet-wrap .input-money-group input[type="text"]'),
     navigate: async (page) => {
       const group = page.locator('#createCustomRace .bet-wrap .input-money-group');
@@ -776,12 +890,15 @@ export const PAGES: PageDef[] = [
   {
     // trade.php — add money to trade.  tornInputMoney is called on
     // .init-trade input[name="amount"] with strictMode: false (allowZero: true).
-    // The panel only renders when a trade is in the initiateTrade step;
-    // returns false if no active trade exists.
+    // Reaching the addmoney panel requires an active trade ID in the URL
+    // hash (#step=addmoney&ID=<n>). Trade IDs are personal & ephemeral —
+    // when the trade below is completed / cancelled / expired, update the
+    // ID in this URL manually.
     name: 'Trade / Add Money',
-    url: '/trade.php',
+    url: '/trade.php#step=addmoney&ID=12106782',
     allowZero: true,
     serial: true,
+    trade: true,
     getInput: (p) => p.locator('.init-trade .input-money-group input[type="text"]'),
     navigate: async (page) => {
       const group = page.locator('.init-trade .input-money-group');
@@ -833,24 +950,32 @@ export const PAGES: PageDef[] = [
   // ── Stock Market ──────────────────────────────────────────────────────────
 
   {
-    // stock-market SPA — LegacyMoneyInput for share count in the buy dialog.
-    // Opens when a stock card is clicked.  data-money = max shares to buy.
+    // stock-market SPA — LegacyMoneyInput for share count.
+    // Deep-link `?sid=stocks&stockID=1&tab=owned` opens the owned-stock
+    // detail view for stockID=1 and surfaces the share-count input directly,
+    // avoiding the previous click-on-card flow. data-money = max shares.
+    // The plugin runs with strictMode: false here (allowZero=true) so that
+    // an empty/zero count is a valid intermediate state.
     name: 'Stock Market / Buy Shares',
-    url: '/page.php?sid=stocks',
+    url: '/page.php?sid=stocks&stockID=1&tab=owned',
+    allowZero: true,
     serial: true,
     getInput: (p) =>
       p.locator('.input-money-group input.input-money:not([type="hidden"])').first(),
     navigate: async (page) => {
-      // Wait for at least one stock card to be visible
-      const card = page.locator('.stock-card, [data-testid="stock-card"], .stock-item').first();
-      const cardVisible = await card
+      // Deep-link lands on the owned-stock LIST but the buy/sell section
+      // is collapsed by default — click the first owned-stock row to
+      // expand it and surface the LegacyMoneyInput.
+      // CSS-module class hashes (stockOwned___eXJed) are unstable across
+      // builds; match by `[class*="stockOwned"]` prefix.
+      const ownedRow = page.locator('[class*="stockOwned"]').first();
+      const rowVisible = await ownedRow
         .waitFor({ state: 'visible', timeout: 20_000 })
         .then(() => true)
         .catch(() => false);
-      if (!cardVisible) return false;
-      await card.click();
+      if (!rowVisible) return false;
+      await ownedRow.click();
 
-      // Wait for the dialog to open and LegacyMoneyInput to mount
       const group = page.locator('.input-money-group').first();
       const inputVisible = await group
         .waitFor({ state: 'visible', timeout: 10_000 })
