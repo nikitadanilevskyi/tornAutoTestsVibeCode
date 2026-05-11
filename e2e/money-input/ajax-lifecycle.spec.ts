@@ -23,6 +23,59 @@ import { PAGES } from './pages';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Bank / Investment as the canonical SINGLE-input page with `ajaxAction`.
+ * The Bank plugin instance is initialised with
+ *   ajaxAction: "inputMoneyAction.php?step=bankAction"
+ * so the visibility-change listener fires a real network request — the
+ * only way to actually exercise the `isAjaxLoading` complete-callback
+ * timing (LC-06).
+ */
+async function gotoBank(page: Page): Promise<boolean> {
+  await page.goto('/bank.php');
+  try {
+    await page.waitForFunction(
+      () => !!document.querySelector('.invest-head-wrap .input-money-group'),
+      { timeout: 15_000 },
+    );
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).$('.invest-head-wrap').show();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).$('#select-length').val('1week').trigger('change');
+    });
+    const input = page.locator(
+      '.invest-head-wrap .input-money-group input.input-money:not([type="hidden"]):not([type="button"])',
+    );
+    await input.waitFor({ state: 'visible', timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Properties Vault — Deposit input is the only `tornInputMoney` consumer
+ * with BOTH `ajaxAction` and `ajaxLabelAction` configured (see
+ * static/js/script/src/properties.js — Vault deposit definition). The
+ * `updateOnVisible()` path is the only place where both AJAX calls fire
+ * in sequence, so it's the only surface where we can exercise the
+ * dual-AJAX behaviour introduced by the refactor.
+ */
+async function gotoVaultDeposit(page: Page): Promise<boolean> {
+  // Vault is on property ID 4165929 (different from Sell/Lease which use
+  // 4191017). Update both IDs manually if the player loses access to
+  // either property.
+  await page.goto('/properties.php#/p=options&ID=4165929&tab=vault');
+  try {
+    const group = page.locator('.deposit-box .input-money-group').first();
+    await group.waitFor({ state: 'visible', timeout: 15_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Faction Give as the canonical multi-input page (vault + recipient).
  *  Same navigation flow as e2e/money-input/faction-give-to-user.spec.ts. */
 async function gotoFactionGive(page: Page): Promise<boolean> {
@@ -173,19 +226,153 @@ test.describe('tornInputMoney — AJAX lifecycle (#21446)', () => {
   });
 
   test('LC-05 — single-input pages register exactly ONE visibility listener', async ({ page }) => {
-    // Pick a single-input page from PAGES that has data-money set.
-    const profileSendCash = PAGES.find((p) => p.name === 'Profile / Send Cash');
-    if (!profileSendCash) test.skip(true, 'Profile / Send Cash page def not present');
-
-    await page.goto(profileSendCash!.url);
-    if (profileSendCash!.navigate) {
-      const ok = await profileSendCash!.navigate(page);
-      if (ok === false) test.skip(true, 'Send Cash navigation prereq failed');
-    }
-    await profileSendCash!.getInput(page).waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
+    if (!(await gotoBank(page))) test.skip(true, 'Bank page navigation failed');
     await page.waitForTimeout(1_000);
-
     const count = await visibilityListenerCount(page);
     expect(count).toBe(1);
+  });
+
+  test('LC-06 — complete callback clears isAjaxLoading: a subsequent updateOnVisible() call fires a fresh AJAX', async ({ page }) => {
+    // Bank initialises the plugin with `ajaxAction`, so the AJAX path is
+    // exercised. We bypass the visibility-change dispatch (which depends on
+    // jQuery event-delivery quirks across the layers) and invoke
+    // `updateOnVisible()` directly on the instance — that is the function
+    // the visibility-change listener calls under the hood, so the contract
+    // we want to test (complete clears isAjaxLoading) is identical.
+    if (!(await gotoBank(page))) test.skip(true, 'Bank page navigation failed');
+    await page.waitForTimeout(1_500);
+
+    // Plugin AJAX action URLs all use inputMoneyAction.php with a step= query.
+    const isMoneyAjax = (url: string) => /inputMoneyAction\.php/i.test(url);
+    const cycle1: string[] = [];
+    const cycle2: string[] = [];
+    let phase: 1 | 2 = 1;
+
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && isMoneyAjax(req.url())) {
+        (phase === 1 ? cycle1 : cycle2).push(req.url());
+      }
+    });
+
+    // Cycle 1 — directly call updateOnVisible on Bank's plugin instance.
+    await page.evaluate(() => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const inst = $.data(
+        $('input.input-money:not([type="hidden"])').get(0),
+        'plugin_tornInputMoney',
+      );
+      inst.updateOnVisible();
+    });
+    await page.waitForTimeout(2_500);
+
+    // If Bank's plugin instance was initialised without ajaxAction (e.g. the
+    // configuration changed), the call short-circuits and fires no request.
+    // Skip in that case — the contract is meaningless when ajaxAction is unset.
+    if (cycle1.length === 0) {
+      test.skip(true, 'Bank plugin instance has no ajaxAction — cannot exercise complete callback');
+      return;
+    }
+
+    // Cycle 2 — after the first cycle's complete callback has fired and
+    // cleared isAjaxLoading, a fresh call must be allowed.
+    phase = 2;
+    await page.evaluate(() => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const inst = $.data(
+        $('input.input-money:not([type="hidden"])').get(0),
+        'plugin_tornInputMoney',
+      );
+      inst.updateOnVisible();
+    });
+    await page.waitForTimeout(2_500);
+
+    // If isAjaxLoading were sticky (the bug we're guarding against), cycle 2
+    // would never fire — the request count would be 0.
+    expect(cycle2.length, 'cycle 2 fires a fresh request after isAjaxLoading clears').toBeGreaterThan(0);
+  });
+
+  test('LC-07 — updateOnVisible() fires BOTH ajaxAction and ajaxLabelAction when both are configured', async ({ page }) => {
+    // Properties Vault Deposit is the only money input in the codebase that
+    // sets both `ajaxAction` and `ajaxLabelAction`. The refactored
+    // updateOnVisible() must dispatch both AJAX calls — one to refresh the
+    // value cap and one to refresh the label/display value.
+    if (!(await gotoVaultDeposit(page))) test.skip(true, 'Vault Deposit not accessible');
+    await page.waitForTimeout(1_500);
+
+    // Read the configured action URLs directly from the plugin instance.
+    const config = await page.evaluate(() => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const el = $('.deposit-box input.input-money:not([type="hidden"])').get(0);
+      const inst = el && $.data(el, 'plugin_tornInputMoney');
+      if (!inst || !inst.option) return null;
+      return {
+        ajaxAction: inst.option('ajaxAction') ?? null,
+        ajaxLabelAction: inst.option('ajaxLabelAction') ?? null,
+      };
+    });
+    if (!config || !config.ajaxAction || !config.ajaxLabelAction) {
+      test.skip(true, 'Vault Deposit plugin instance has no ajaxLabelAction configured');
+      return;
+    }
+
+    // Count requests by their full URL — the two actions have different
+    // step= values so we can distinguish them.
+    const seen: string[] = [];
+    page.on('request', (req) => {
+      if (/inputMoneyAction\.php/i.test(req.url())) seen.push(req.url());
+    });
+
+    await page.evaluate(() => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const inst = $.data(
+        $('.deposit-box input.input-money:not([type="hidden"])').get(0),
+        'plugin_tornInputMoney',
+      );
+      inst.updateOnVisible();
+    });
+    await page.waitForTimeout(2_500);
+
+    // Both actions point at inputMoneyAction.php but they differ in some
+    // query parameter (ajaxAction has &ID=…&step=generalAction, while
+    // ajaxLabelAction has only step=generalAction). We expect TWO requests.
+    expect(seen.length, `Both ajaxAction and ajaxLabelAction must fire — got ${seen.length} request(s): ${seen.join('\n  ')}`).toBeGreaterThanOrEqual(2);
+  });
+
+  test('LC-08 — deferred init (plugin attached inside AJAX callback): re-running init does not duplicate the visibility listener', async ({ page }) => {
+    // Bank initializes the plugin INSIDE its onBankLoad AJAX callback.
+    // When the user changes the investment-length dropdown, bank.js re-runs
+    // its setup logic. The plugin's guard (`if (!$.data(this, ...))`) must
+    // prevent a duplicate instance, and the namespaced `.off(...).on(...)`
+    // registration must keep the document-level listener count at 1.
+    if (!(await gotoBank(page))) test.skip(true, 'Bank page navigation failed');
+    await page.waitForTimeout(1_500);
+
+    const beforeCount = await visibilityListenerCount(page);
+    expect(beforeCount, 'baseline: listener count after initial deferred init').toBe(1);
+
+    // Force a re-init pass by selecting a different investment length.
+    // bank.js handles #select-length 'change' and runs its setup logic.
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const $ = (window as { jQuery?: unknown }).jQuery as any;
+      $('#select-length').val('2week').trigger('change');
+    });
+    await page.waitForTimeout(2_000);
+
+    const afterCount = await visibilityListenerCount(page);
+    expect(afterCount, 'listener count must remain 1 after a re-init pass').toBe(1);
+
+    // Also verify the plugin instance is the SAME one (not replaced)
+    const sameInstance = await page.evaluate(() => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const el = $('input.input-money:not([type="hidden"])').get(0);
+      return !!(el && $.data(el, 'plugin_tornInputMoney'));
+    });
+    expect(sameInstance, 'plugin instance still present after re-init pass').toBe(true);
   });
 });

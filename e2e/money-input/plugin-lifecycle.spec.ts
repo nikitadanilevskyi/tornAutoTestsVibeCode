@@ -287,4 +287,94 @@ test.describe('tornInputMoney — plugin lifecycle (#21446)', () => {
     });
     expect(err).toMatch(/does not exist/i);
   });
+
+  test('PL-10 — destroy() preserves external listeners attached to the original DOM node', async ({ page }) => {
+    if (!(await gotoFactionGive(page))) test.skip();
+    await page.waitForTimeout(1_500);
+
+    // Attach an external focus listener BEFORE destroy, then destroy the plugin,
+    // then dispatch focus. The change-log explicitly claims the original DOM
+    // node is preserved (insertBefore + remove, not clone), so any listener
+    // attached BEFORE destroy must continue to fire.
+    const result = await page.evaluate(async () => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const $input = $('input.input-money:not([type="hidden"])').first();
+      if ($input.length === 0) return { skipped: true } as const;
+
+      const el = $input.get(0) as HTMLInputElement;
+
+      // External listener — purposely on the underlying DOM node.
+      let focusFired = 0;
+      const onFocus = (): void => { focusFired++; };
+      el.addEventListener('focus', onFocus);
+
+      // Pre-destroy sanity: focus once to confirm the listener actually works.
+      el.focus();
+      await new Promise((r) => setTimeout(r, 50));
+      el.blur();
+      const firedBeforeDestroy = focusFired;
+
+      $input.tornInputMoney('destroy');
+
+      // Post-destroy: focus the same physical node. Cloning would have
+      // dropped the listener; insertBefore + remove preserves it.
+      el.focus();
+      await new Promise((r) => setTimeout(r, 100));
+      el.removeEventListener('focus', onFocus);
+
+      return {
+        skipped: false,
+        firedBeforeDestroy,
+        firedAfterDestroy: focusFired - firedBeforeDestroy,
+      } as const;
+    });
+
+    if (result.skipped) test.skip();
+    expect(result.firedBeforeDestroy, 'pre-destroy: listener wired correctly').toBe(1);
+    expect(result.firedAfterDestroy, 'post-destroy: external listener still fires (DOM node preserved)').toBeGreaterThanOrEqual(1);
+  });
+
+  test('PL-11 — formatter() dispatches native input event observable by external (React-style) listeners', async ({ page }) => {
+    if (!(await gotoFactionGive(page))) test.skip();
+    await page.waitForTimeout(1_500);
+
+    // PL-07 / PL-08 verify the COUNT of `input` events fired by formatter().
+    // PL-11 verifies the FRAMEWORK-COMPAT contract: an external listener
+    // attached via `el.addEventListener('input', …)` actually observes the
+    // dispatchEvent call from the native value setter. This is what React /
+    // Vue rely on to keep their controlled-component state in sync.
+    const result = await page.evaluate(async () => {
+      // @ts-expect-error jQuery global
+      const $ = window.jQuery;
+      const $input = $('input.input-money:not([type="hidden"])').first();
+      if ($input.length === 0) return -1;
+
+      const el = $input.get(0) as HTMLInputElement;
+
+      let observedValue: string | null = null;
+      let observedBubbles = false;
+      const onInput = (e: Event) => {
+        observedValue = (e.target as HTMLInputElement).value;
+        observedBubbles = e.bubbles;
+      };
+      el.addEventListener('input', onInput);
+
+      // Drive the plugin's native setter + dispatchEvent path.
+      $input.val('1000');
+      const inst = $.data(el, 'plugin_tornInputMoney');
+      inst.format();
+
+      await new Promise((r) => setTimeout(r, 200));
+      el.removeEventListener('input', onInput);
+
+      return { observedValue, observedBubbles, fieldValue: el.value };
+    });
+
+    if (result === -1) test.skip();
+    const r = result as { observedValue: string | null; observedBubbles: boolean; fieldValue: string };
+    expect(r.observedValue, 'external listener received the formatted value').not.toBeNull();
+    expect(r.observedValue, 'external listener sees the formatted value').toBe(r.fieldValue);
+    expect(r.observedBubbles, 'dispatched event must bubble (so React onChange catches it)').toBe(true);
+  });
 });
